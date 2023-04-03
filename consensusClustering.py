@@ -127,3 +127,91 @@ class ConsensusCluster:
         assert self.Mk is not None, "First run fit"
         return self.cluster_(n_clusters=self.bestK).fit_predict(
             data)
+
+class CustomCC(ConsensusCluster):
+    """
+    Доопределённый класс, который умеет принимать сетку параметров для инициализации модели естиматора.
+    Params:
+        params: dict (default {})
+        *args
+        **kwargs
+    """
+    def __init__(self, params: dict=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.model_params = params if params else {}
+        
+    def fit(self, data, verbose=False):
+        """
+        Fits a consensus matrix for each number of clusters
+
+        Args:
+          * data -> (examples,attributes) format
+          * verbose -> should print or not
+        """
+        Mk = np.zeros((self.K_-self.L_, data.shape[0], data.shape[0]))
+        Is = np.zeros((data.shape[0],)*2)
+        for k in range(self.L_, self.K_):  # for each number of clusters
+            i_ = k-self.L_
+            if verbose:
+                print("At k = %d, aka. iteration = %d" % (k, i_))
+            for h in range(self.H_):  # resample H times
+                if verbose:
+                    print("\tAt resampling h = %d, (k = %d)" % (h, k))
+                resampled_indices, resample_data = self._internal_resample(
+                    data, self.resample_proportion_)
+                if verbose: # добавил, чтобы убедиться, что моделька нормально иницализируется
+                    print(self.cluster_(n_clusters=k, **self.model_params).get_params())
+                Mh = self.cluster_(n_clusters=k, **self.model_params).fit_predict(resample_data) # поменялась только иницилазиация модели
+                # find indexes of elements from same clusters with bisection
+                # on sorted array => this is more efficient than brute force search
+                index_mapping = np.array((Mh, resampled_indices)).T
+                index_mapping = index_mapping[index_mapping[:, 0].argsort()]
+                sorted_ = index_mapping[:, 0]
+                id_clusts = index_mapping[:, 1]
+                for i in range(k):  # for each cluster
+                    ia = bisect.bisect_left(sorted_, i)
+                    ib = bisect.bisect_right(sorted_, i)
+                    is_ = id_clusts[ia:ib]
+                    ids_ = np.array(list(combinations(is_, 2))).T
+                    # sometimes only one element is in a cluster (no combinations)
+                    if ids_.size != 0:
+                        Mk[i_, ids_[0], ids_[1]] += 1
+                # increment counts
+                ids_2 = np.array(list(combinations(resampled_indices, 2))).T
+                Is[ids_2[0], ids_2[1]] += 1
+            Mk[i_] /= Is+1e-8  # consensus matrix
+            # Mk[i_] is upper triangular (with zeros on diagonal), we now make it symmetric
+            Mk[i_] += Mk[i_].T
+            Mk[i_, range(data.shape[0]), range(
+                data.shape[0])] = 1  # always with self
+            Is.fill(0)  # reset counter
+        self.Mk = Mk
+        # fits areas under the CDFs
+        self.Ak = np.zeros(self.K_-self.L_)
+        for i, m in enumerate(Mk):
+            hist, bins = np.histogram(m.ravel(), density=True)
+            self.Ak[i] = np.sum(h*(b-a)
+                             for b, a, h in zip(bins[1:], bins[:-1], np.cumsum(hist)))
+        # fits differences between areas under CDFs
+        self.deltaK = np.array([(Ab-Aa)/Aa if i > 2 else Aa
+                                for Ab, Aa, i in zip(self.Ak[1:], self.Ak[:-1], range(self.L_, self.K_-1))])
+        self.bestK = np.argmax(self.deltaK) + \
+            self.L_ if self.deltaK.size > 0 else self.L_
+
+    def predict(self):
+        """
+        Predicts on the consensus matrix, for best found cluster number
+        """
+        assert self.Mk is not None, "First run fit"
+        return self.cluster_(n_clusters=self.bestK, **self.model_params).fit_predict( # поменялась только иницилазиация модели
+            1-self.Mk[self.bestK-self.L_])
+
+    def predict_data(self, data):
+        """
+        Predicts on the data, for best found cluster number
+        Args:
+          * data -> (examples,attributes) format 
+        """
+        assert self.Mk is not None, "First run fit"
+        return self.cluster_(n_clusters=self.bestK, **self.model_params).fit_predict( # поменялась только иницилазиация модели
+            data)
