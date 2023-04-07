@@ -152,7 +152,7 @@ class CustomCC(ConsensusCluster):
         Is = np.zeros((data.shape[0],)*2)
         for k in range(self.L_, self.K_):  # for each number of clusters
             i_ = k-self.L_
-            print(f"k={{k}}")
+            print(f"k={k}")
             if verbose:
                 print("At k = %d, aka. iteration = %d" % (k, i_))
             for h in range(self.H_):  # resample H times
